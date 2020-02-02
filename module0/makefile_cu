@@ -1,0 +1,4 @@
+NVCC = nvcc
+
+helloworld.o: hello-world.cu
+	$(NVCC) -o helloworld.o hello-world.cu
