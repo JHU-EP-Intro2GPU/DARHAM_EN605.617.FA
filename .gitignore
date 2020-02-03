@@ -31,4 +31,13 @@
 *.out
 *.app
 
+*.nv
+*.ICEauthority
+*.Xauthority
+*.dbus
+*.vnc
+*.voc
+*.gitconfig
+*.md
+
 \.DS_Store
