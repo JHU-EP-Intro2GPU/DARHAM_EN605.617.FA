@@ -1,0 +1,5 @@
+CC = gcc
+CFLAGS = -lOpenCL
+
+helloworld: hello_world_cl.c
+	$(CC) -o helloworld hello_world_cl.c $(CFLAGS)

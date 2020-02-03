@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 #include <math.h>
+#include <unistd.h>
+
 #ifdef __APPLE__
 	#include <OpenCL/opencl.h>
 #else
