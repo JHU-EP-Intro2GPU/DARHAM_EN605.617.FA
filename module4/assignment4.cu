@@ -12,7 +12,7 @@ void profileCopiesHostToDevice(int        *d_a,
                    int        *d_b, 
 				   int        *h_b,
                    const unsigned int  		bytes,
-                   char         *desc){
+                   const char         *desc){
   
 
  
@@ -30,7 +30,7 @@ void profileCopiesHostToDevice(int        *d_a,
 
   float time;
   cudaEventElapsedTime(&time, startEvent, stopEvent);
-  printf("\n%s transfers Host to Device bandwidth (MB/s): %f\n\n",desc, bytes * 1e-3 / time);
+  printf("\n%s transfers Host to Device Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc, time*1e3, bytes * 1e-3 / time);
 
 /*
   for (int i = 0; i < n; ++i) {
@@ -46,7 +46,7 @@ void profileCopiesHostToDevice(int        *d_a,
 }	
 	
 void profileCopiesDeviceToHost( int *h_c_add, int *d_c_add, int *h_c_sub, int *d_c_sub, 
-								int *h_c_mult, int *d_c_mult, int *h_c_mod, int *d_c_mod, const unsigned int bytes, char *desc){
+								int *h_c_mult, int *d_c_mult, int *h_c_mod, int *d_c_mod, const unsigned int bytes, const char *desc){
 
 
 
@@ -69,7 +69,7 @@ void profileCopiesDeviceToHost( int *h_c_add, int *d_c_add, int *h_c_sub, int *d
 
   float time;
   cudaEventElapsedTime(&time, startEvent, stopEvent);
-  printf("\n%s transfers Device To Host bandwidth (MB/s): %f\n\n",desc, bytes * 1e-3 / time);
+  printf("\n%s transfers Device To Host Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc,time*1e3, bytes * 1e-3 / time);
 
 /*
   for (int i = 0; i < n; ++i) {
@@ -86,7 +86,8 @@ void profileCopiesDeviceToHost( int *h_c_add, int *d_c_add, int *h_c_sub, int *d
 } 	
 	
     
-/* Arithmetic Functions 
+/*
+				Arithmetic Functions 
 */
 // Add Function 
 __global__ void add(int *a, int *b, int *c, int n){
@@ -130,7 +131,37 @@ __global__ void mod(int *a, int *b, int *c, int n){
 }
 
 
-
+/*
+		Caeser Excercise 
+*/
+__global__ void caeser( const char *message, char *result, int shift){ 
+	
+	// Get our global thread ID
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+	
+	// do a strcpy 
+	char ch; 
+	strcpy(result, message); 
+	ch = result[id]; 
+	
+	if( ch >= 'a' && ch <= 'z'){
+		ch = ch + shift;
+		
+		if( ch > 'z')
+			ch = ch - 'z' + 'a' - 1; //wrap around if we hit the end of the alphabet
+		
+		result[id] = ch; 
+	}
+	else if(ch >= 'A' && ch <= 'Z'){
+		ch = ch + shift; 
+		
+		if( ch > 'Z')
+			ch = ch - 'Z' + 'A' - 1; //wrap around if we hit the end of the alphabet
+		
+		result[id] = ch; 
+	}
+	
+}
 
 // Pageable Memory Implementation
 void execute_arithmetic_pageable(int totalThreads, int numBlocks){
@@ -328,11 +359,55 @@ printf("\n\t\t*****Executing Arithmetic Functions Using Pinned Memory*****\n");
 	cudaFreeHost(h_c_mod);
 }
 
+
+void execute_caesar_cypher(void){
+	
+	int length = 10; 
+	int shift = 4; 
+	const char *h_message;  
+	char *h_result; 
+	
+	char *d_message; 
+	char *d_result; 
+	
+
+	
+	// Size, in bytes of the message
+	const unsigned int bytes = length*sizeof(char);
+	
+	dim3 block(3); 
+	dim3 grid((length+block.x-1)/block.x); 
+	
+	cudaMallocHost((void**)&h_message, bytes); //host
+	cudaMallocHost((void**)&h_result, bytes);
+
+	cudaMalloc(&d_message, bytes); //device
+	cudaMalloc(&d_result, bytes); 
+	
+	h_message = "Hello"; 
+	
+	cudaMemcpy( d_message, h_message, bytes, cudaMemcpyHostToDevice);
+	
+	printf("performing Caeser Cypher\n"); 
+	caeser<<<grid, block>>>(d_message, d_result, shift); 
+	
+	cudaMemcpy( h_result, d_result, bytes, cudaMemcpyDeviceToHost);
+	
+	
+	cudaFree(d_message); 
+	cudaFree(d_result); 
+	
+	cudaFreeHost(h_message); 
+	cudaFreeHost(h_result); 
+	
+	
+}
 int main(int argc, char** argv)
 {
 	
 	int totalThreads = (1 << 10);
 	int blockSize = 256;
+	
 
 	if (argc >= 2) {
 		totalThreads = atoi(argv[1]);
@@ -340,6 +415,8 @@ int main(int argc, char** argv)
 	if (argc >= 3) {
 		blockSize = atoi(argv[2]);
 	}
+	
+	
 
 	int numBlocks = totalThreads/blockSize;
 
@@ -365,8 +442,11 @@ int main(int argc, char** argv)
 	
 	
 	//Execute Pageable Arithmetic
-	execute_arithmetic_pageable(totalThreads, numBlocks);
-	execute_arithmetic_pinned(totalThreads, numBlocks);
+	//execute_arithmetic_pageable(totalThreads, numBlocks);
+	//execute_arithmetic_pinned(totalThreads, numBlocks);
+	
+	execute_caesar_cypher(); 
+	
     
   return 0;
 }
