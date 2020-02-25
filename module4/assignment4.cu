@@ -29,7 +29,7 @@ void profileCopiesHostToDevice(int        *d_a,
 
   float time;
   cudaEventElapsedTime(&time, startEvent, stopEvent);
-  printf("\n%s transfers Host to Device Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc, time*1e3, bytes * 1e-3 / time);
+  printf("\n%s transfers Host to Device Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc, time, bytes * 1e-3 / time);
 
   // clean up events
   cudaEventDestroy(startEvent);
@@ -58,7 +58,7 @@ void profileCopiesDeviceToHost( int *h_c_add, int *d_c_add, int *h_c_sub, int *d
 
   float time;
   cudaEventElapsedTime(&time, startEvent, stopEvent);
-  printf("\n%s transfers Device To Host Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc,time*1e3, bytes * 1e-3 / time);
+  printf("\n%s transfers Device To Host Time Elaped: %f ms, Bandwidth (MB/s): %f\n\n",desc,time, bytes * 1e-3 / time);
 
   // clean up events
   cudaEventDestroy(startEvent);

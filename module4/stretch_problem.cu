@@ -30,11 +30,19 @@ __global__ void encrypt(unsigned int *text, unsigned int *key, unsigned int *res
 }
 
 void pageable_transfer_execution(int array_size, int threads_per_block, FILE *input_fp, FILE *key_fp) { /* Calculate the size of the array
-	*/ int array_size_in_bytes = (sizeof(unsigned int) * (array_size)); int i = 0;
+	*/ 
 
+	 int array_size_in_bytes = (sizeof(unsigned int) * (array_size)); 
+	 int i = 0;
+
+
+	 
 	 unsigned int *cpu_text = (unsigned int *) malloc(array_size_in_bytes); 
 	 unsigned int *cpu_key = (unsigned int *) malloc(array_size_in_bytes); 
 	 unsigned int *cpu_result = (unsigned int *) malloc(array_size_in_bytes);
+
+	 //initialize device variables
+	 unsigned int *gpu_text, *gpu_key, *gpu_result; 
 
 	 /* Read characters from the input and key files into the text and key arrays respectively */ 
 	 // Code left out for brevity sake
@@ -53,26 +61,35 @@ void pageable_transfer_execution(int array_size, int threads_per_block, FILE *in
 
 	 /* Execute the encryption kernel and keep track of start and end time for duration */ 
 	 float duration = 0; 
-	 cudaEvent_t start_time = get_time();
+	 cudaEvent_t start, stop; 
 
+	 cudaEventCreate(&start); 
+	 cudaEventCreate(&stop);
+	 
+	 //because the kernel code is the same this is not what we want to time
 	 encrypt<<<num_blocks, num_threads>>>(gpu_text, gpu_key, gpu_result);
 
-	 cudaEvent_t end_time = get_time(); 
-	 cudaEventSynchronize(end_time); 
-	 cudaEventElapsedTime(&duration, start_time, end_time);
 
+	 cudaEventRecord(start); 
 	 /* Copy the changed GPU memory back to the CPU */ 
 	 cudaMemcpy( cpu_result, gpu_result, array_size_in_bytes, cudaMemcpyDeviceToHost);
-
-	 printf("Pageable Transfer- Duration: %fmsn\n", duration); 
+	 
+	 cudaEventRecord(stop); 
+	 cudaEventSynchronize(stop); 
+	 float milliseconds = 0; 
+	 cudaEventElapsedTime(&milliseconds, start, stop); 
+	
+	 printf("Pageable Transfer- Duration: %fms\n\n", milliseconds); 
 	 print_encryption_results(cpu_text, cpu_key, cpu_result, array_size);
 
+	 
 	 /* Free the GPU memory */ 
 	 // INSERT CODE HERE
-
+	 cudaEventDestroy(start);
+	
 	 /* Free the CPU memory */ 
 	 // INSERT CODE HERE
-
+ 	cudaEventDestroy(stop);
 }
 
 void pinned_transfer_execution(int array_size, int threads_per_block, FILE *input_fp, FILE *key_fp) { // Code left out for brevity sake
@@ -80,9 +97,12 @@ void pinned_transfer_execution(int array_size, int threads_per_block, FILE *inpu
 	 //pin it cudaMallocHost((void **)&cpu_text_pinned, array_size_in_bytes); cudaMallocHost((void **)&cpu_key_pinned, array_size_in_bytes);
 	cudaMallocHost((void **)&cpu_result_pinned, array_size_in_bytes);
 
-	 /* Copy the memory over */ 
-	// INSERT CODE HERE
 
+	 /* Copy the memory over */ 
+	cudaMallocHost((void**)&cpu_text, array_size_in_bytes);
+ 	cudaMallocHost((void**)&cpu_key, array_size_in_bytes);
+ 	cudaMallocHost((void**)&cpu_result, array_size_in_bytes);
+ 	
 	 /* Declare and allocate pointers for GPU based parameters */ 
 	unsigned int *gpu_text; 
 	unsigned int *gpu_key; 
@@ -101,19 +121,24 @@ void pinned_transfer_execution(int array_size, int threads_per_block, FILE *inpu
 	const unsigned int num_threads = array_size/num_blocks;
 
 	 /* Execute the encryption kernel and keep track of start and end time for duration */ 
-	float duration = 0; 
-	cudaEvent_t start_time = get_time();
+	 
+ 	cudaEvent_t start, stop; 
 
+ 	cudaEventCreate(&start); 
+ 	cudaEventCreate(&stop);
+ 	
 	 encrypt<<<num_blocks, num_threads>>>(gpu_text, gpu_key, gpu_result);
-
-	 cudaEvent_t end_time = get_time(); 
-	 cudaEventSynchronize(end_time); 
-	 cudaEventElapsedTime(&duration, start_time, end_time);
-
+	 
 	 /* Copy the changed GPU memory back to the CPU */ 
 	 cudaMemcpy( cpu_result_pinned, gpu_result, array_size_in_bytes, cudaMemcpyDeviceToHost);
 
-	 printf("Pinned Transfer- Duration: %fmsn\n", duration); 
+
+	 cudaEventRecord(stop); 
+	cudaEventSynchronize(stop); 
+	float milliseconds = 0; 
+	cudaEventElapsedTime(&milliseconds, start, stop); 
+ 
+	 printf("Pinned Transfer- Duration: %fmsn\n", milliseconds); 
 	 print_encryption_results(cpu_text_pinned, cpu_key_pinned, cpu_result_pinned, array_size);
 
 	 /* Free the GPU memory */ 
