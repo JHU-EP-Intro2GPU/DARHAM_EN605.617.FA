@@ -1,2 +1,4 @@
-all: assignment.c
-	gcc assignment.c -o assignment.exe
+all: assignment9Thrust.cu
+	nvcc assignment9Thrust.cu -o assignment9Thrust.exe
+
+
