@@ -18,7 +18,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
+#include <chrono>
 #include "info.hpp"
 
 #define DEFAULT_PLATFORM 0
@@ -37,18 +37,21 @@ checkErr(cl_int err, const char * name)
     }
 }
 
-
-//
-void initializeInputArray(int argc, char** argv, int *inputArray){
+void initializeInputArray(int argc, char **argv, float *inputArray){
 
   if( argc != NUM_BUFFER_ELEMENTS + 1){
-    std::cout << "Not enough elements to populate Buffer size of 16, using default values ...." << std::endl;
-    for(int i = 0; i<NUM_BUFFER_ELEMENTS; i++)
+    std::cout << "Using Default Values...." << std::endl;
+    for(int i = 0; i<NUM_BUFFER_ELEMENTS; i++){
+
       inputArray[i] = i;
+
+    }
   }else{
-    for(int i = 1; i<=argc; i++)
-      inputArray[i] = std::atoi(argv[i]);
+    for(int i = 1; i<argc; i++){
+      inputArray[i-1] = std::atof(argv[i]) ;
+    }
   }
+
 }
 
 ///
@@ -56,6 +59,8 @@ void initializeInputArray(int argc, char** argv, int *inputArray){
 //
 int main(int argc, char** argv)
 {
+
+    auto start = std::chrono::steady_clock::now();
     cl_int errNum;
     cl_uint numPlatforms;
     cl_uint numDevices;
@@ -66,11 +71,17 @@ int main(int argc, char** argv)
     std::vector<cl_kernel> kernels;
     std::vector<cl_command_queue> queues;
     std::vector<cl_mem> subBuffers;
-    int *inputArray, *outputArray;
+    float *inputArray = new float[NUM_BUFFER_ELEMENTS];
+    float *outputArray = new float[NUM_BUFFER_ELEMENTS];
 
     int platform = DEFAULT_PLATFORM;
 
-    std::cout << "Simple buffer and sub-buffer Example" << std::endl;
+    std::cout << "\n\n\tSimple buffer and sub-buffer Example" << std::endl;
+
+
+
+
+
 
 
     // First, select an OpenCL platform to run on.
@@ -182,19 +193,19 @@ int main(int argc, char** argv)
     cl_mem buffer = clCreateBuffer(
         context,
         CL_MEM_READ_WRITE,
-        sizeof(int) * NUM_BUFFER_ELEMENTS,
+        sizeof(float) * NUM_BUFFER_ELEMENTS,
         NULL,
         &errNum);
     checkErr(errNum, "clCreateBuffer");
 
-    // now for all devices other than the first create a sub-buffer
+    //  create sub buffers from main buffer
     int numSubBuffers = NUM_BUFFER_ELEMENTS / NUM_SUB_BUFFER_ELEMENTS;
     for (unsigned int i = 0; i < numSubBuffers; i++)
     {
         cl_buffer_region region =
             {
-                NUM_SUB_BUFFER_ELEMENTS * i * sizeof(int),
-                NUM_SUB_BUFFER_ELEMENTS * sizeof(int)
+                NUM_SUB_BUFFER_ELEMENTS * i * sizeof(float),
+                NUM_SUB_BUFFER_ELEMENTS * sizeof(float)
             };
         cl_mem subbuffer = clCreateSubBuffer(
             buffer,
@@ -207,18 +218,15 @@ int main(int argc, char** argv)
         subBuffers.push_back(subbuffer);
     }
 
+    int size = NUM_SUB_BUFFER_ELEMENTS;
+
     // Create command queues
     for (unsigned int i = 0; i < numSubBuffers; i++)
     {
-        InfoDevice<cl_device_type>::display(
-            deviceIDs[i],
-            CL_DEVICE_TYPE,
-            "CL_DEVICE_TYPE");
-
         cl_command_queue queue =
             clCreateCommandQueue(
                 context,
-                deviceIDs[i],
+                deviceIDs[0],
                 0,
                 &errNum);
         checkErr(errNum, "clCreateCommandQueue");
@@ -232,25 +240,28 @@ int main(int argc, char** argv)
         checkErr(errNum, "clCreateKernel(mean)");
 
         errNum = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *)&subBuffers[i]);
+        errNum = clSetKernelArg(kernel, 1, sizeof(cl_uint), &size);
         checkErr(errNum, "clSetKernelArg(mean)");
 
         kernels.push_back(kernel);
     }
 
-    // Write input data
+    // Write input array data into buffer
     errNum = clEnqueueWriteBuffer(
         queues[0],
         buffer,
         CL_TRUE,
         0,
-        sizeof(int) * NUM_BUFFER_ELEMENTS,
+        sizeof(float) * NUM_BUFFER_ELEMENTS,
         (void*)inputArray,
         0,
         NULL,
         NULL);
 
     std::vector<cl_event> events;
-    // call kernel for each device
+
+
+    // call kernel for each queue
     for (unsigned int i = 0; i < queues.size(); i++)
     {
         cl_event event;
@@ -276,31 +287,33 @@ int main(int argc, char** argv)
     clWaitForEvents(events.size(), &events[0]);
 
 
-    // Read back computed data
+    // Read back computed data from main buffer
     clEnqueueReadBuffer(
         queues[0],
         buffer,
         CL_TRUE,
         0,
-        sizeof(int) * NUM_BUFFER_ELEMENTS * numDevices,
+        sizeof(float) * NUM_BUFFER_ELEMENTS * numDevices,
         (void*)outputArray,
         0,
         NULL,
         NULL);
 
+    //stop the timer and display to user
+    auto end = std::chrono::steady_clock::now();
+    std::cout << std::endl << "Program Time Elapsed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n"<< std::endl;
 
-    // Display output in rows
-    for (unsigned i = 0; i < numDevices; i++)
-    {
-        for (unsigned elems = i * NUM_BUFFER_ELEMENTS; elems < ((i+1) * NUM_BUFFER_ELEMENTS); elems++)
-        {
-            std::cout << " " << outputArray[elems];
-        }
+    // Display input array and the averaged results
+    int elems;
+    std::cout << "Printing Results...\nInput Array:";
+    for (elems = 0; elems <  NUM_BUFFER_ELEMENTS; elems++)
+      std::cout << " " << inputArray[elems];
+    std::cout << std::endl;
+    std::cout << "Output Array:";
+    for (elems = 0; elems <  NUM_BUFFER_ELEMENTS; elems++)
+        std::cout << " " << outputArray[elems];
 
-        std::cout << std::endl;
-    }
 
-    std::cout << "Program completed successfully" << std::endl;
-
+    std::cout << std::endl;
     return 0;
 }
