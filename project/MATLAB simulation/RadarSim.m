@@ -7,6 +7,7 @@ fc = 12e9; %center frequency of radar
 c = 3e8; %speed of light
 lambda = c/fc; %wavelength of the signal
 
+
 % compute the necessary sweep time tm based on maximum range
 range_max = 200;
 tm = 5.5*range2time(range_max,c);
