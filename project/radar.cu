@@ -49,7 +49,7 @@ typedef float2 Complex;
 
 //Static threshold. normally in sophisticated radar signal processing this is value
 //dynamic such as Constant False Alarm Rate algorithms.
-#define THRESHOLD 2
+#define THRESHOLD 2.2
 
 /*******************************************************************************
 
@@ -87,21 +87,22 @@ void freeEventTimer(timerEvent *timer){
 Helper Functions
 
 *******************************************************************************/
-void getRngSpeed(float magResult[][DOPPLERFFTLENGTH], float *rngGrid, float *speedGrid){
+void getRngSpeed(float **rngDoppMag, float *rngGrid, float *speedGrid){
   // extracts the range from the range-doppler matrix
   for(int i = 0; i<RANGEFFTLENGTH; i++){
     for(int j = 0; j<DOPPLERFFTLENGTH; j++){
-      if(magResult[i][j] >= THRESHOLD)
+      if(rngDoppMag[i][j] >= THRESHOLD)
         std::cout << "Target Detected.\n" << "Range: " << rngGrid[i] << " m; Speed: " << speedGrid[j] << " m/s." << std::endl;
     }
   }
 }
 
-void magFFT(Complex *a, float *result,  const int n){
-  // computes the magnitude of the complex FFT signal and scales it by the length
-  //TODO: consider using hypotf() from CUDA math library (device function)
-  for(int i = 0; i<n; i++){
-    result[i] = sqrt( pow(a[i].x  , 2.0) + pow(a[i].y , 2.0) );
+void abs(Complex **rngDoppMatrix, float **rngDoppMag){
+  // computes the magnitude of the complex range doppler matrix
+  for(int i = 0; i<RANGEFFTLENGTH; i++){
+    for(int j = 0; j<DOPPLERFFTLENGTH; j++){
+      rngDoppMag[i][j] = sqrt( pow(rngDoppMatrix[i][j].x  , 2.0) + pow(rngDoppMatrix[i][j].y , 2.0) );
+    }
   }
 }
 
@@ -142,20 +143,11 @@ void fftshift( Complex *fftDat, int N, int n){
     }
 }
 
-/*******************************************************************************
-
-Range Doppler Response and Radar Function
-
-*******************************************************************************/
-//TODO: seperate functionality and clean up
-void executeRangeDopplerResponse(std::string realIQFileName, std::string imagIQFileName){
-
-  // Main function to calculate the range doppler map of raw radar IQ data and
-  // extract range and speed of a target if present
+void readData( std::vector <std::vector <float> > &iData, std::vector <std::vector <float> > &qData,
+               std::string realIQFileName, std::string imagIQFileName){
 
   // Read In phase (I) and Quadrature (Q) Data
   // Read I Data
-  std::vector <std::vector <float> > iData;
   std::ifstream infileReal( realIQFileName );
   while (infileReal){
     std::string s;
@@ -175,7 +167,6 @@ void executeRangeDopplerResponse(std::string realIQFileName, std::string imagIQF
      std::cerr << "Fooey!\n";
 
    // Read Q Data
-   std::vector <std::vector <float> > qData;
    std::ifstream infileImag( imagIQFileName );
    while (infileImag){
      std::string s;
@@ -194,111 +185,168 @@ void executeRangeDopplerResponse(std::string realIQFileName, std::string imagIQF
     if (!infileImag.eof())
     std::cerr << "Fooey!\n";
 
-    // allocate host data
-    Complex *hSig = new Complex[iData.size()]; //complex baseband signal
-    Complex *hSig_w = new Complex[RANGEFFTLENGTH]; //spectrum of time domain signal
-    float *hMagSig_w = new float[RANGEFFTLENGTH]; //magnitude of spectrum (host)
-    Complex radarData[RANGEFFTLENGTH][iData[0].size()];
-    Complex fftradarData[RANGEFFTLENGTH][DOPPLERFFTLENGTH];
-    float magResult[RANGEFFTLENGTH][DOPPLERFFTLENGTH];
+}
 
-    //calculate the range and speed grid of the rand-doppler map data
-    float sweepSlope = SAMPLERATE / SWEEPTIME;
-    float waveLength = LIGHTSPEED / CENTERFREQ;
-    float prf = SAMPLERATE / iData.size(); //pulse to pulse repitition frequency
-    float *rngGrid = calcRngGrid(RANGEFFTLENGTH, SAMPLERATE,sweepSlope);
-    float *speedGrid = calcSpeedGrid(DOPPLERFFTLENGTH, prf, waveLength);
+// Perform the fast time processing. this simply takes the FFT of each pulse
+void executeRangeProcessing(std::vector <std::vector <float> > &iData, std::vector <std::vector <float> > &qData,
+                            Complex **rngFFTMatrix){
+  //Range Processing
+  //Process FFT of range samples (fast time)
+  size_t nPulses = iData[0].size();
+  size_t rngSamples = iData.size();
 
-    //initialize and allocate the device signal
-    int bytes = iData.size() * sizeof(Complex);
-    int fftBytes = RANGEFFTLENGTH * sizeof(Complex);
-    cufftComplex *dSig, *fftSig;
-    cudaMalloc((void **)&dSig, bytes);
-    cudaMalloc((void **)&fftSig, fftBytes);
+  //host signal and spectrum
+  Complex *hSig = new Complex[rngSamples]; //complex baseband signal
+  Complex *hSig_w = new Complex[RANGEFFTLENGTH]; //spectrum of time domain signal
 
-    // initiate fft handles to perform fast and slow time processing
-    cufftHandle plan, doppplan;
-    cufftPlan1d(&plan, RANGEFFTLENGTH, CUFFT_C2C, 1);
-    cufftPlan1d(&doppplan, DOPPLERFFTLENGTH, CUFFT_C2C, 1);
+  //device signal and spectrum
+  cufftComplex *dSig,*dSig_w;
+  // different byte size for baseband signal and spectrum (rngSample vs RANGEFFTLENGTH)
+  int bytes = rngSamples * sizeof(Complex);
+  cudaMalloc((void **)&dSig, bytes);
 
-    // Start a timer
-    timerEvent timer;
-    startEventTimer(&timer);
+  int fftBytes = RANGEFFTLENGTH * sizeof(Complex);
+  cudaMalloc((void **)&dSig_w, fftBytes);
 
-    //Range Processing
-    //Process FFT of range samples (fast time)
-    for(int i = 0; i<iData[0].size(); i++){
-      //this next loop will operate on the fast time or range samples
-      for(int j = 0; j<iData.size(); j++){
-        hSig[j].x = iData[j][i];
-        hSig[j].y = qData[j][i];
-      }
-      cudaMemcpy(dSig, hSig, bytes, cudaMemcpyHostToDevice);
-      cufftExecC2C(plan, (cufftComplex *)dSig, (cufftComplex *)fftSig, CUFFT_FORWARD);
-      cudaDeviceSynchronize();
-      cudaMemcpy(hSig_w, fftSig, fftBytes, cudaMemcpyDeviceToHost);
+  // CUDA's FFT Handle
+  cufftHandle plan;
+  cufftPlan1d(&plan, RANGEFFTLENGTH, CUFFT_C2C, 1);
 
-      //shift the fft output so that it is within -Fs/2 < freq < Fs/2
-      fftshift(hSig_w, RANGEFFTLENGTH/2, RANGEFFTLENGTH);
+  // for each pulse (or sweep) comput the FFT across range samples
+  for(int i = 0; i<nPulses; i++){
 
-      //build the post range processed data cube
-      for(int k = 0; k<RANGEFFTLENGTH; k++){
-            radarData[k][i] = hSig_w[k];
-      }
-    }
-    stopEventTimer(&timer);
-    std::cout << "Range Processing Time Elapsed: " << timer.time_ms << " ms\n" << std::endl;
-
-    // DOPPLER PROCESSING
-    // this next step implements the same procedure as above but across
-    // the slow time i.e. across columns
-    Complex *hdoppFFT = new Complex[iData[0].size()];
-    Complex *hdoppFFT_w = new Complex[DOPPLERFFTLENGTH];
-    cufftComplex *ddoppFFT, *ddoppFFTout;
-    int doppfftBytes = DOPPLERFFTLENGTH * sizeof(Complex);
-    int doppfftBytes2 = iData[0].size() * sizeof(Complex);
-
-    cudaMalloc((void **)&ddoppFFT, doppfftBytes2);
-    cudaMalloc((void **)&ddoppFFTout, doppfftBytes);
-
-    startEventTimer(&timer);
-    for(int i = 0; i<RANGEFFTLENGTH; i++){
-      for(int j = 0; j<iData[0].size(); j++){
-        hdoppFFT[j] = radarData[i][j];
-      }
-      //perform the slow time / dopper
-      cudaMemcpy(ddoppFFT, hdoppFFT, doppfftBytes2, cudaMemcpyHostToDevice);
-      cufftExecC2C(doppplan, (cufftComplex *)ddoppFFT, (cufftComplex *)ddoppFFTout, CUFFT_FORWARD);
-      cudaDeviceSynchronize();
-      cudaMemcpy(hdoppFFT_w, ddoppFFTout, doppfftBytes, cudaMemcpyDeviceToHost);
-
-      fftshift(hdoppFFT_w, DOPPLERFFTLENGTH/2, DOPPLERFFTLENGTH);
-
-      for(int k = 0; k<DOPPLERFFTLENGTH; k++){
-            fftradarData[i][k] = hdoppFFT_w[k];
-      }
-    }
-    stopEventTimer(&timer);
-    std::cout << "Doppler Processing Time Elapsed: " << timer.time_ms << " ms\n" << std::endl;
-
-    // calculate the magnitude of the data cube
-    for(int i = 0; i<RANGEFFTLENGTH; i++){
-      for(int j = 0; j<DOPPLERFFTLENGTH; j++){
-        magResult[i][j] = sqrt( pow(fftradarData[i][j].x  , 2.0) + pow(fftradarData[i][j].y , 2.0) );
-      }
+    //this next loop will operate across fast time or range samples
+    for(int j = 0; j<rngSamples; j++){
+      hSig[j].x = iData[j][i];
+      hSig[j].y = qData[j][i];
     }
 
-    //Extract the range and speed of the target from the range doppler map
-    getRngSpeed( magResult, rngGrid, speedGrid);
+    cudaMemcpy(dSig, hSig, bytes, cudaMemcpyHostToDevice);
+    cufftExecC2C(plan, (cufftComplex *)dSig, (cufftComplex *)dSig_w, CUFFT_FORWARD);
+    cudaDeviceSynchronize();
+    cudaMemcpy(hSig_w, dSig_w, fftBytes, cudaMemcpyDeviceToHost);
 
-  //clean up
-  delete hSig, hSig_w, hMagSig_w;
-  cufftDestroy(plan);
-  cufftDestroy(doppplan);
+    //shift the fft output so that it is within -Fs/2 < freq < Fs/2
+    fftshift(hSig_w, RANGEFFTLENGTH/2, RANGEFFTLENGTH);
 
+    //build the post range processed data cube
+    for(int k = 0; k<RANGEFFTLENGTH; k++){
+          rngFFTMatrix[k][i] = hSig_w[k];
+    }
+  }
+
+  delete hSig, hSig_w;
   cudaFree(dSig);
-  cudaFree(fftSig);
+  cudaFree(dSig_w);
+}
 
+// perform doppler processing. This takes as input the post range processing matrix
+// takes the FFT across pulses
+void executeDopplerProcessing(int nPulses, Complex **rngFFTMatrix, Complex **rngDoppMatrix){
+
+  // DOPPLER PROCESSING
+  // this next step implements the same procedure as above but across
+  // the slow time i.e. across columns
+
+  //host signal across pulses
+  Complex *hSigPulse = new Complex[nPulses]; // signal across pulses
+  Complex *hSigPulse_w = new Complex[DOPPLERFFTLENGTH]; //spectrum
+
+  cufftComplex *dSigPulse, *dSigPulse_w;
+  int bytes = nPulses * sizeof(Complex);
+  int fftbytes = DOPPLERFFTLENGTH * sizeof(Complex);
+
+  cudaMalloc((void **)&dSigPulse, bytes);
+  cudaMalloc((void **)&dSigPulse_w, fftbytes);
+
+  // initiate fft handles to perform fast and slow time processing
+  cufftHandle plan;
+  cufftPlan1d(&plan, DOPPLERFFTLENGTH, CUFFT_C2C, 1);
+
+  for(int i = 0; i<RANGEFFTLENGTH; i++){
+    for(int j = 0; j<nPulses; j++){
+      hSigPulse[j] = rngFFTMatrix[i][j];
+    }
+    //perform the slow time / doppler
+    cudaMemcpy(dSigPulse, hSigPulse, bytes, cudaMemcpyHostToDevice);
+    cufftExecC2C(plan, (cufftComplex *)dSigPulse, (cufftComplex *)dSigPulse_w, CUFFT_FORWARD);
+    cudaDeviceSynchronize();
+    cudaMemcpy(hSigPulse_w, dSigPulse_w, fftbytes, cudaMemcpyDeviceToHost);
+
+    fftshift(hSigPulse_w, DOPPLERFFTLENGTH/2, DOPPLERFFTLENGTH);
+
+    for(int k = 0; k<DOPPLERFFTLENGTH; k++){
+          rngDoppMatrix[i][k] = hSigPulse_w[k];
+    }
+  }
+
+  delete hSigPulse, hSigPulse_w;
+  cudaFree(dSigPulse);
+  cudaFree(dSigPulse_w);
+}
+
+
+/*******************************************************************************
+
+Range Doppler Response and Radar Target Function
+
+*******************************************************************************/
+void executeTargetDetection(std::string realIQFileName, std::string imagIQFileName){
+
+  // Main function to calculate the range doppler map of raw radar IQ data and
+  // extract range and speed of a target if present
+
+  //Read in In Phase and Quadrature data
+  std::vector <std::vector <float> > iData, qData;
+  readData( iData , qData, realIQFileName, imagIQFileName);
+
+  int nPulses  = iData[0].size(); // number of pulses (columns)
+  int rngSamples = iData.size(); // number of range samples (rows)
+
+  // Initialze the radar data matrices
+  Complex **rngFFTMatrix = new Complex *[RANGEFFTLENGTH]; // post range processed matrix using FFT
+  Complex **rngDoppMatrix = new Complex *[RANGEFFTLENGTH]; // post doppler processed matrix using FFT
+  float **rngDoppMag = new float *[RANGEFFTLENGTH]; // magnitude response of the range-doppler matrix
+
+  for(int i = 0; i < RANGEFFTLENGTH; i++){
+    rngFFTMatrix[i] = new Complex[nPulses];
+    rngDoppMatrix[i] = new Complex[DOPPLERFFTLENGTH];
+    rngDoppMag[i] = new float[DOPPLERFFTLENGTH];
+  }
+
+
+   // Start a timer
+  timerEvent timer;
+  startEventTimer(&timer);
+
+  //perform the range processing across range samples
+  executeRangeProcessing( iData, qData , rngFFTMatrix);
+
+  stopEventTimer(&timer);
+  std::cout << "Range Processing Time Elapsed: " << timer.time_ms << " ms\n" << std::endl;
+
+  // perform the doppler processing across pulses
+  executeDopplerProcessing( nPulses, rngFFTMatrix, rngDoppMatrix);
+
+  stopEventTimer(&timer);
+  std::cout << "Doppler Processing Time Elapsed: " << timer.time_ms << " ms\n" << std::endl;
+
+  // calculate the magnitude of the range doppler matrix
+  abs( rngDoppMatrix, rngDoppMag );
+
+  //calculate the range and speed grid of the rand-doppler map data
+  // the range and speed grid are simply frequency components (FFT)
+  // using the sample rate aand wavelength we can calculate the grids
+  float sweepSlope = SAMPLERATE / SWEEPTIME;
+  float waveLength = LIGHTSPEED / CENTERFREQ;
+  float prf = SAMPLERATE / rngSamples; //pulse to pulse repitition frequency
+  float *rngGrid = calcRngGrid(RANGEFFTLENGTH, SAMPLERATE,sweepSlope);
+  float *speedGrid = calcSpeedGrid(DOPPLERFFTLENGTH, prf, waveLength);
+
+  //Extract the range and speed of the target from the range doppler map
+  getRngSpeed( rngDoppMag, rngGrid, speedGrid);
+
+  delete rngFFTMatrix, rngDoppMatrix;
 }
 
 
@@ -323,7 +371,7 @@ int main(int argc, char** argv)
 
 
   //Range doppler response
-  executeRangeDopplerResponse(realIQFileName, imagIQFileName);
+  executeTargetDetection(realIQFileName, imagIQFileName);
 
   return 0;
 }
