@@ -87,16 +87,6 @@ void freeEventTimer(timerEvent *timer){
 Helper Functions
 
 *******************************************************************************/
-void getRngSpeed(float **rngDoppMag, float *rngGrid, float *speedGrid){
-  // extracts the range from the range-doppler matrix
-  for(int i = 0; i<RANGEFFTLENGTH; i++){
-    for(int j = 0; j<DOPPLERFFTLENGTH; j++){
-      if(rngDoppMag[i][j] >= THRESHOLD)
-        std::cout << "Target Detected.\n" << "Range: " << rngGrid[i] << " m; Speed: " << speedGrid[j] << " m/s." << std::endl;
-    }
-  }
-}
-
 void abs(Complex **rngDoppMatrix, float **rngDoppMag){
   // computes the magnitude of the complex range doppler matrix
   for(int i = 0; i<RANGEFFTLENGTH; i++){
@@ -104,6 +94,20 @@ void abs(Complex **rngDoppMatrix, float **rngDoppMag){
       rngDoppMag[i][j] = sqrt( pow(rngDoppMatrix[i][j].x  , 2.0) + pow(rngDoppMatrix[i][j].y , 2.0) );
     }
   }
+}
+
+void fftshift( Complex *fftDat, int N, int n){
+    // shift zero-frequency components to center of spectrum
+    int j;
+    Complex temp;
+    for(int i = 0; i <N;i++){
+
+      temp = fftDat[n-1];
+      for (j = n-1; j > 0; j--)
+        fftDat[j] = fftDat[j - 1];
+
+      fftDat[j] = temp;
+    }
 }
 
 float* calcRngGrid( int nPoint, float Fs, float sweepSlope){
@@ -129,19 +133,16 @@ float* calcSpeedGrid( int nPoint, float Fs, float waveLength){
   return speedGrid;
 }
 
-void fftshift( Complex *fftDat, int N, int n){
-    // shift zero-frequency components to center of spectrum
-    int j;
-    Complex temp;
-    for(int i = 0; i <N;i++){
-
-      temp = fftDat[n-1];
-      for (j = n-1; j > 0; j--)
-        fftDat[j] = fftDat[j - 1];
-
-      fftDat[j] = temp;
+void getRngSpeed(float **rngDoppMag, float *rngGrid, float *speedGrid){
+  // extracts the range from the range-doppler matrix
+  for(int i = 0; i<RANGEFFTLENGTH; i++){
+    for(int j = 0; j<DOPPLERFFTLENGTH; j++){
+      if(rngDoppMag[i][j] >= THRESHOLD)
+        std::cout << "Target Detected.\n" << "Range: " << rngGrid[i] << " m; Speed: " << -1 * speedGrid[j] << " m/s." << std::endl;
     }
+  }
 }
+
 
 void readData( std::vector <std::vector <float> > &iData, std::vector <std::vector <float> > &qData,
                std::string realIQFileName, std::string imagIQFileName){
@@ -184,9 +185,14 @@ void readData( std::vector <std::vector <float> > &iData, std::vector <std::vect
     }
     if (!infileImag.eof())
     std::cerr << "Fooey!\n";
-
 }
 
+
+/*******************************************************************************
+
+RANGE / DOPPLER PROCESSING FUNCTIONS
+
+*******************************************************************************/
 // Perform the fast time processing. this simply takes the FFT of each pulse
 void executeRangeProcessing(std::vector <std::vector <float> > &iData, std::vector <std::vector <float> > &qData,
                             Complex **rngFFTMatrix){
@@ -313,7 +319,6 @@ void executeTargetDetection(std::string realIQFileName, std::string imagIQFileNa
     rngDoppMatrix[i] = new Complex[DOPPLERFFTLENGTH];
     rngDoppMag[i] = new float[DOPPLERFFTLENGTH];
   }
-
 
    // Start a timer
   timerEvent timer;
